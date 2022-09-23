@@ -15,8 +15,7 @@ UnFreeze_Epoch = 100
 Unfreeze_batch_size = 8
 Unfreeze_lr = 1e-4
 
-# 是否开启多线程
-num_worker = 1
+
 # 数据集路径设置
 root_path = r'.\Dataset_Object_Detection\village'
 train_txt = os.path.join(root_path, 'train.txt')
