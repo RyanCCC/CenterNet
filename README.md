@@ -7,7 +7,7 @@
 
 ## 项目结构
 ```
-    ├──centernetwork：存放centernetwork的基本网络结构代码，包括resnet、hourglass以及loss
+    ├──centernet：存放centernet的基本网络结构代码，包括resnet、hourglass以及loss
     ├──checkpoint:存放模型训练的checkpoint
     ├──train_dataset：训练数据集
        ├──Annotation：保存目标的标记

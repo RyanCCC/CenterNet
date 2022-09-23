@@ -81,10 +81,6 @@ class CenternetDatasets(keras.utils.Sequence):
 
         for b, i in enumerate(range(index * self.batch_size, (index + 1) * self.batch_size)):  
             i           = i % self.length
-            #---------------------------------------------------#
-            #   训练时进行数据的随机增强
-            #   验证时不进行数据的随机增强
-            #---------------------------------------------------#
             image, box  = self.get_random_data(self.annotation_lines[i], self.input_shape, random = self.train)
             if len(box) != 0:
                 boxes = np.array(box[:, :4],dtype=np.float32)
@@ -99,22 +95,12 @@ class CenternetDatasets(keras.utils.Sequence):
                 if h > 0 and w > 0:
                     radius  = gaussian_radius((math.ceil(h), math.ceil(w)))
                     radius  = max(0, int(radius))
-                    #-------------------------------------------------#
-                    #   计算真实框所属的特征点
-                    #-------------------------------------------------#
                     ct      = np.array([(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2], dtype=np.float32)
                     ct_int  = ct.astype(np.int32)
-                    #----------------------------#
                     #   绘制高斯热力图
-                    #----------------------------#
                     batch_hms[b, :, :, cls_id] = draw_gaussian(batch_hms[b, :, :, cls_id], ct_int, radius)
-                    #---------------------------------------------------#
-                    #   计算宽高真实值
-                    #---------------------------------------------------#
                     batch_whs[b, i]         = 1. * w, 1. * h
-                    #---------------------------------------------------#
                     #   计算中心偏移量
-                    #---------------------------------------------------#
                     batch_regs[b, i]        = ct - ct_int
                     #---------------------------------------------------#
                     #   将对应的mask设置为1，用于排除多余的0

@@ -42,9 +42,6 @@ def residual(x, out_dim, name, stride=1):
     return x
 
 def bottleneck_layer(x, num_channels, hgid):
-    #-----------------------------------#
-    #   中间的深度结构
-    #-----------------------------------#
     pow_str = 'center.' * 5
     x = residual(x, num_channels, name='kps.%d.%s0' % (hgid, pow_str))
     x = residual(x, num_channels, name='kps.%d.%s1' % (hgid, pow_str))
@@ -65,21 +62,11 @@ def connect_left_right(left, right, num_channels, num_channels_next, name):
     return out    
 
 def pre(x, num_channels):
-    #-----------------------------------#
-    #   图片进入金字塔前的预处理
-    #   一般是一次普通卷积
-    #   加上残差结构
-    #-----------------------------------#
     x = conv2d(x, 7, 128, name='pre.0', stride=2)
     x = residual(x, num_channels, name='pre.1', stride=2)
     return x
 
 def left_features(bottom, hgid, dims):
-    #-------------------------------------------------#
-    #   进行五次下采样
-    #   f1, f2, f4 , f8, f16, f32 : 1, 1/2, 1/4 1/8, 1/16, 1/32 resolution
-    #   5 times reduce/increase: (256, 384, 384, 384, 512)
-    #-------------------------------------------------#
     features = [bottom]
     for kk, nh in enumerate(dims):
         x = residual(features[-1], nh, name='kps.%d%s.down.0' % (hgid, str(kk)), stride=2)
@@ -88,11 +75,6 @@ def left_features(bottom, hgid, dims):
     return features
 
 def right_features(leftfeatures, hgid, dims):
-    #-------------------------------------------------#
-    #   进行五次上采样，并进行连接
-    #   f1, f2, f4 , f8, f16, f32 : 1, 1/2, 1/4 1/8, 1/16, 1/32 resolution
-    #   5 times reduce/increase: (256, 384, 384, 384, 512)
-    #-------------------------------------------------#
     rf = bottleneck_layer(leftfeatures[-1], dims[-1], hgid)
     for kk in reversed(range(len(dims))):
         pow_str = ''

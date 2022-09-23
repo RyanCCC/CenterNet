@@ -31,10 +31,6 @@ class BBoxUtility(object):
         image_shape = np.array(image_shape)
 
         if letterbox_image:
-            #-----------------------------------------------------------------#
-            #   这里求出来的offset是图像有效区域相对于图像左上角的偏移情况
-            #   new_shape指的是宽高缩放情况
-            #-----------------------------------------------------------------#
             new_shape = np.round(image_shape * np.min(input_shape/image_shape))
             offset  = (input_shape - new_shape)/2./input_shape
             scale   = input_shape/new_shape
@@ -55,23 +51,11 @@ class BBoxUtility(object):
             detections              = prediction[i]
             detections[:, [0, 2]]   = detections[:, [0, 2]] / (input_shape[1] / 4)
             detections[:, [1, 3]]   = detections[:, [1, 3]] / (input_shape[0] / 4)
-
-            #----------------------------------------------------------#
-            #   利用置信度进行第一轮筛选
-            #----------------------------------------------------------#
             conf_mask   = detections[:, 4] >= confidence
             detections  = detections[conf_mask]
             
             unique_labels   = np.unique(detections[:, -1])
-            #-------------------------------------------------------------------#
-            #   对种类进行循环，
-            #   非极大抑制的作用是筛选出一定区域内属于同一种类得分最大的框，
-            #   对种类进行循环可以帮助我们对每一个类分别进行非极大抑制。
-            #-------------------------------------------------------------------#
             for c in unique_labels:
-                #------------------------------------------#
-                #   获得某一类得分筛选后全部的预测结果
-                #------------------------------------------#
                 detections_class = detections[detections[:, -1] == c]
                 if nms:
                     #-----------------------------------------#
