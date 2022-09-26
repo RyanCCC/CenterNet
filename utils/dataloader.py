@@ -102,13 +102,7 @@ class CenternetDatasets(keras.utils.Sequence):
                     batch_whs[b, i]         = 1. * w, 1. * h
                     #   计算中心偏移量
                     batch_regs[b, i]        = ct - ct_int
-                    #---------------------------------------------------#
-                    #   将对应的mask设置为1，用于排除多余的0
-                    #---------------------------------------------------#
                     batch_reg_masks[b, i]   = 1
-                    #---------------------------------------------------#
-                    #   表示第ct_int[1]行的第ct_int[0]个。
-                    #---------------------------------------------------#
                     batch_indices[b, i]     = ct_int[1] * self.output_shape[0] + ct_int[0]
 
             batch_images[b] = preprocess_input(image)
@@ -126,10 +120,6 @@ class CenternetDatasets(keras.utils.Sequence):
             batch_indices   = np.zeros((self.batch_size, self.max_objects), dtype=np.float32)
                 
             for b in range(self.batch_size):
-                #---------------------------------------------------#
-                #   训练时进行数据的随机增强
-                #   验证时不进行数据的随机增强
-                #---------------------------------------------------#
                 image, box  = self.get_random_data(self.annotation_lines[i], self.input_shape, random = self.train)
 
                 if len(box) != 0:
@@ -145,30 +135,12 @@ class CenternetDatasets(keras.utils.Sequence):
                     if h > 0 and w > 0:
                         radius  = gaussian_radius((math.ceil(h), math.ceil(w)))
                         radius  = max(0, int(radius))
-                        #-------------------------------------------------#
-                        #   计算真实框所属的特征点
-                        #-------------------------------------------------#
                         ct      = np.array([(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2], dtype=np.float32)
                         ct_int  = ct.astype(np.int32)
-                        #----------------------------#
-                        #   绘制高斯热力图
-                        #----------------------------#
                         batch_hms[b, :, :, cls_id] = draw_gaussian(batch_hms[b, :, :, cls_id], ct_int, radius)
-                        #---------------------------------------------------#
-                        #   计算宽高真实值
-                        #---------------------------------------------------#
-                        batch_whs[b, i]         = 1. * w, 1. * h
-                        #---------------------------------------------------#
-                        #   计算中心偏移量
-                        #---------------------------------------------------#
-                        batch_regs[b, i]        = ct - ct_int
-                        #---------------------------------------------------#
-                        #   将对应的mask设置为1，用于排除多余的0
-                        #---------------------------------------------------#
+                        batch_whs[b, i]  = 1. * w, 1. * h
+                        batch_regs[b, i]  = ct - ct_int
                         batch_reg_masks[b, i]   = 1
-                        #---------------------------------------------------#
-                        #   表示第ct_int[1]行的第ct_int[0]个。
-                        #---------------------------------------------------#
                         batch_indices[b, i]     = ct_int[1] * self.output_shape[0] + ct_int[0]
 
                 batch_images[b] = preprocess_input(image)

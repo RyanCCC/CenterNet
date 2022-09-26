@@ -14,11 +14,11 @@ for gpu in gpus:
 if __name__ == "__main__":
     centernet = CenterNet()
     mode = "dir_predict"
-    video_path      = 0
+    video_path = 0
     video_save_path = ""
-    video_fps       = 25.0
+    video_fps = 25.0
     test_interval = 100
-    dir_origin_path = "./img/"
+    dir_origin_path = "./samples/"
     dir_save_path   = "./result/"
 
     if mode == "predict":
@@ -73,22 +73,15 @@ if __name__ == "__main__":
             out.release()
         cv2.destroyAllWindows()
 
-    elif mode == "fps":
-        img = Image.open('img/street.jpg')
-        tact_time = centernet.get_FPS(img, test_interval)
-        print(str(tact_time) + ' seconds, ' + str(1/tact_time) + 'FPS, @batch_size 1')
-
     elif mode == "dir_predict":
         import os
-
         from tqdm import tqdm
-
         img_names = os.listdir(dir_origin_path)
         for img_name in tqdm(img_names):
             if img_name.lower().endswith(('.bmp', '.dib', '.png', '.jpg', '.jpeg', '.pbm', '.pgm', '.ppm', '.tif', '.tiff')):
                 image_path  = os.path.join(dir_origin_path, img_name)
-                image       = Image.open(image_path)
-                r_image     = centernet.detect_image(image)
+                image = Image.open(image_path)
+                r_image = centernet.detect_image(image)
                 if not os.path.exists(dir_save_path):
                     os.makedirs(dir_save_path)
                 r_image.save(os.path.join(dir_save_path, img_name))

@@ -1,6 +1,6 @@
 import os
 eager =False
-class_name=r'.\Dataset_Object_Detection\village\village.names'
+class_name=r'./data/village.names'
 ckp_path = './checkpoint/centernet_resnet50_voc.h5'
 input_shape = [512, 512]
 backbone='resnet50'
@@ -24,5 +24,5 @@ val_txt = os.path.join(root_path, 'val.txt')
 model_ckp = './model/model.h5'
 log_dir = './logs/'
 font = r'.\Centernet\data\simhei.ttf'
-confidence=0.1
+confidence=0.5
 
