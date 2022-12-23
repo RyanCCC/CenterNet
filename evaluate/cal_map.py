@@ -5,7 +5,7 @@ import tensorflow as tf
 from PIL import Image
 from tqdm import tqdm
 
-from centernet.centernet import CenterNet_Inference as CenterNet
+from net.centernet import CenterNet_Inference as CenterNet
 from utils.utils import get_classes
 
 gpus = tf.config.experimental.list_physical_devices(device_type='GPU')

@@ -13,8 +13,8 @@ def resize_image(image, size, letterbox_image):
     w, h    = size
     if letterbox_image:
         scale   = min(w/iw, h/ih)
-        nw      = int(iw*scale)
-        nh      = int(ih*scale)
+        nw = int(iw*scale)
+        nh = int(ih*scale)
 
         image   = image.resize((nw,nh), Image.BICUBIC)
         new_image = Image.new('RGB', size, (128,128,128))

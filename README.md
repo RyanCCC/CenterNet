@@ -6,6 +6,7 @@
 
 
 ## 项目结构
+
 ```
     ├──centernet：存放centernet的基本网络结构代码，包括resnet、hourglass以及loss
     ├──checkpoint:存放模型训练的checkpoint
@@ -32,15 +33,11 @@
 在`config.py`中设置好训练集路径以及配置好训练的参数之后，执行`train.py`文件即可开始训练。
 
 ## 推理验证
+
 1. 在`config.py`配置好你的推理参数，然后运行`inference.py`，查看推理结果
 2. 在evaluate文件夹里面有cal_map.py文件对模型的性能进行评估。
 
-## TODO
 
-- [ ] 模型导出：`export.py`
+## 参考
 
-- [ ] 模型量化和压缩
-
-
-## 关于CenterNet
-可以参考我的博客：https://blog.csdn.net/u012655441/article/details/121395058
+1. [目标检测 Anchor Free：CenterNet](https://blog.csdn.net/u012655441/article/details/121395058)

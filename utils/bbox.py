@@ -58,14 +58,10 @@ class BBoxUtility(object):
             for c in unique_labels:
                 detections_class = detections[detections[:, -1] == c]
                 if nms:
-                    #-----------------------------------------#
-                    #   取出得分高于confidence的框
-                    #-----------------------------------------#
+                    
                     boxes_to_process = detections_class[:, :4]
                     confs_to_process = detections_class[:, 4]
-                    #-----------------------------------------#
-                    #   进行iou的非极大抑制
-                    #-----------------------------------------#
+                    # 非极大值抑制
                     idx = tf.image.non_max_suppression(
                         boxes_to_process, confs_to_process,
                         self._top_k,

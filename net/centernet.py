@@ -2,9 +2,9 @@ import tensorflow as tf
 from tensorflow.keras.layers import Input, Lambda, MaxPooling2D
 from tensorflow.keras.models import Model
 
-from centernet.loss import loss
-from centernet.hourglass import HourglassNetwork
-from centernet.resnet import ResNet50, centernet_head
+from .loss import loss
+from .hourglass import HourglassNetwork
+from .resnet import ResNet50, centernet_head
 import colorsys
 import os
 import time

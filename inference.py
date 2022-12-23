@@ -5,7 +5,7 @@ import numpy as np
 import tensorflow as tf
 from PIL import Image
 
-from centernet.centernet import CenterNet_Inference as CenterNet
+from net import CenterNet_Inference as CenterNet
 
 gpus = tf.config.experimental.list_physical_devices(device_type='GPU')
 for gpu in gpus:
