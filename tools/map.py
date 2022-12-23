@@ -5,9 +5,15 @@ import operator
 import os
 import shutil
 import sys
-
+try:
+    from pycocotools.coco import COCO
+    from pycocotools.cocoeval import COCOeval
+except:
+    pass
 import cv2
-import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use('Agg')
+from matplotlib import pyplot as plt
 import numpy as np
 
 '''
@@ -265,7 +271,7 @@ def draw_plot_func(dictionary, n_classes, window_title, plot_title, x_label, out
     # close the plot
     plt.close()
 
-def get_map(MINOVERLAP, draw_plot, path = './map_out'):
+def get_map(MINOVERLAP, draw_plot, score_threhold=0.5, path = './map_out'):
     GT_PATH             = os.path.join(path, 'ground-truth')
     DR_PATH             = os.path.join(path, 'detection-results')
     IMG_PATH            = os.path.join(path, 'images-optional')
@@ -285,7 +291,13 @@ def get_map(MINOVERLAP, draw_plot, path = './map_out'):
         
     if os.path.exists(RESULTS_FILES_PATH):
         shutil.rmtree(RESULTS_FILES_PATH)
+    else:
+        os.makedirs(RESULTS_FILES_PATH)
     if draw_plot:
+        try:
+            matplotlib.use('TkAgg')
+        except:
+            pass
         os.makedirs(os.path.join(RESULTS_FILES_PATH, "AP"))
         os.makedirs(os.path.join(RESULTS_FILES_PATH, "F1"))
         os.makedirs(os.path.join(RESULTS_FILES_PATH, "Recall"))
@@ -419,12 +431,12 @@ def get_map(MINOVERLAP, draw_plot, path = './map_out'):
             tp          = [0] * nd
             fp          = [0] * nd
             score       = [0] * nd
-            score05_idx = 0
+            score_threhold_idx = 0
             for idx, detection in enumerate(dr_data):
                 file_id     = detection["file_id"]
                 score[idx]  = float(detection["confidence"])
-                if score[idx] > 0.5:
-                    score05_idx = idx
+                if score[idx] >= score_threhold:
+                    score_threhold_idx = idx
 
                 if show_animation:
                     ground_truth_img = glob.glob1(IMG_PATH, file_id + ".*")
@@ -562,9 +574,9 @@ def get_map(MINOVERLAP, draw_plot, path = './map_out'):
             text    = "{0:.2f}%".format(ap*100) + " = " + class_name + " AP " #class_name + " AP = {0:.2f}%".format(ap*100)
 
             if len(prec)>0:
-                F1_text         = "{0:.2f}".format(F1[score05_idx]) + " = " + class_name + " F1 "
-                Recall_text     = "{0:.2f}%".format(rec[score05_idx]*100) + " = " + class_name + " Recall "
-                Precision_text  = "{0:.2f}%".format(prec[score05_idx]*100) + " = " + class_name + " Precision "
+                F1_text         = "{0:.2f}".format(F1[score_threhold_idx]) + " = " + class_name + " F1 "
+                Recall_text     = "{0:.2f}%".format(rec[score_threhold_idx]*100) + " = " + class_name + " Recall "
+                Precision_text  = "{0:.2f}%".format(prec[score_threhold_idx]*100) + " = " + class_name + " Precision "
             else:
                 F1_text         = "0.00" + " = " + class_name + " F1 " 
                 Recall_text     = "0.00%" + " = " + class_name + " Recall " 
@@ -573,11 +585,12 @@ def get_map(MINOVERLAP, draw_plot, path = './map_out'):
             rounded_prec    = [ '%.2f' % elem for elem in prec ]
             rounded_rec     = [ '%.2f' % elem for elem in rec ]
             results_file.write(text + "\n Precision: " + str(rounded_prec) + "\n Recall :" + str(rounded_rec) + "\n\n")
+            
             if len(prec)>0:
-                print(text + "\t||\tscore_threhold=0.5 : " + "F1=" + "{0:.2f}".format(F1[score05_idx])\
-                    + " ; Recall=" + "{0:.2f}%".format(rec[score05_idx]*100) + " ; Precision=" + "{0:.2f}%".format(prec[score05_idx]*100))
+                print(text + "\t||\tscore_threhold=" + str(score_threhold) + " : " + "F1=" + "{0:.2f}".format(F1[score_threhold_idx])\
+                    + " ; Recall=" + "{0:.2f}%".format(rec[score_threhold_idx]*100) + " ; Precision=" + "{0:.2f}%".format(prec[score_threhold_idx]*100))
             else:
-                print(text + "\t||\tscore_threhold=0.5 : F1=0.00% ; Recall=0.00% ; Precision=0.00%")
+                print(text + "\t||\tscore_threhold=" + str(score_threhold) + " : " + "F1=0.00% ; Recall=0.00% ; Precision=0.00%")
             ap_dictionary[class_name] = ap
 
             n_images = counter_images_per_class[class_name]
@@ -603,7 +616,7 @@ def get_map(MINOVERLAP, draw_plot, path = './map_out'):
                 plt.cla()
 
                 plt.plot(score, F1, "-", color='orangered')
-                plt.title('class: ' + F1_text + "\nscore_threhold=0.5")
+                plt.title('class: ' + F1_text + "\nscore_threhold=" + str(score_threhold))
                 plt.xlabel('Score_Threhold')
                 plt.ylabel('F1')
                 axes = plt.gca()
@@ -613,7 +626,7 @@ def get_map(MINOVERLAP, draw_plot, path = './map_out'):
                 plt.cla()
 
                 plt.plot(score, rec, "-H", color='gold')
-                plt.title('class: ' + Recall_text + "\nscore_threhold=0.5")
+                plt.title('class: ' + Recall_text + "\nscore_threhold=" + str(score_threhold))
                 plt.xlabel('Score_Threhold')
                 plt.ylabel('Recall')
                 axes = plt.gca()
@@ -623,7 +636,7 @@ def get_map(MINOVERLAP, draw_plot, path = './map_out'):
                 plt.cla()
 
                 plt.plot(score, prec, "-s", color='palevioletred')
-                plt.title('class: ' + Precision_text + "\nscore_threhold=0.5")
+                plt.title('class: ' + Precision_text + "\nscore_threhold=" + str(score_threhold))
                 plt.xlabel('Score_Threhold')
                 plt.ylabel('Precision')
                 axes = plt.gca()
@@ -634,7 +647,9 @@ def get_map(MINOVERLAP, draw_plot, path = './map_out'):
                 
         if show_animation:
             cv2.destroyAllWindows()
-
+        if n_classes == 0:
+            print("未检测到任何种类，请检查标签信息与get_map.py中的classes_path是否修改。")
+            return 0
         results_file.write("\n# mAP of all classes\n")
         mAP     = sum_AP / n_classes
         text    = "mAP = {0:.2f}%".format(mAP*100)
@@ -707,34 +722,6 @@ def get_map(MINOVERLAP, draw_plot, path = './map_out'):
             '',
             )
 
-    # """
-    # Plot the total number of occurences of each class in the "detection-results" folder
-    # """
-    # if draw_plot:
-    #     window_title = "detection-results-info"
-    #     # Plot title
-    #     plot_title = "detection-results\n"
-    #     plot_title += "(" + str(len(dr_files_list)) + " files and "
-    #     count_non_zero_values_in_dictionary = sum(int(x) > 0 for x in list(det_counter_per_class.values()))
-    #     plot_title += str(count_non_zero_values_in_dictionary) + " detected classes)"
-    #     # end Plot title
-    #     x_label = "Number of objects per class"
-    #     output_path = RESULTS_FILES_PATH + "/detection-results-info.png"
-    #     to_show = False
-    #     plot_color = 'forestgreen'
-    #     true_p_bar = count_true_positives
-    #     draw_plot_func(
-    #         det_counter_per_class,
-    #         len(det_counter_per_class),
-    #         window_title,
-    #         plot_title,
-    #         x_label,
-    #         output_path,
-    #         to_show,
-    #         plot_color,
-    #         true_p_bar
-    #         )
-
     """
     Draw log-average miss rate plot (Show lamr of all classes in decreasing order)
     """
@@ -778,6 +765,7 @@ def get_map(MINOVERLAP, draw_plot, path = './map_out'):
             plot_color,
             ""
             )
+    return mAP
 
 def preprocess_gt(gt_path, class_names):
     image_ids   = os.listdir(gt_path)
@@ -793,10 +781,6 @@ def preprocess_gt(gt_path, class_names):
         image['file_name'] = image_id + '.jpg'
         image['width']     = 1
         image['height']    = 1
-        #-----------------------------------------------------------------#
-        #   感谢 多学学英语吧 的提醒
-        #   解决了'Results do not correspond to current coco set'问题
-        #-----------------------------------------------------------------#
         image['id']        = str(image_id)
 
         for line in lines_list:
@@ -818,6 +802,8 @@ def preprocess_gt(gt_path, class_names):
                 class_name = class_name[:-1]
             
             left, top, right, bottom = float(left), float(top), float(right), float(bottom)
+            if class_name not in class_names:
+                continue
             cls_id  = class_names.index(class_name) + 1
             bbox    = [left, top, right - left, bottom - top, difficult, str(image_id), cls_id, (right - left) * (bottom - top) - 10.0]
             boxes_per_image.append(bbox)
@@ -863,8 +849,41 @@ def preprocess_dr(dr_path, class_names):
             left, top, right, bottom = float(left), float(top), float(right), float(bottom)
             result                  = {}
             result["image_id"]      = str(image_id)
+            if class_name not in class_names:
+                continue
             result["category_id"]   = class_names.index(class_name) + 1
             result["bbox"]          = [left, top, right - left, bottom - top]
             result["score"]         = float(confidence)
             results.append(result)
     return results
+ 
+def get_coco_map(class_names, path):
+    GT_PATH     = os.path.join(path, 'ground-truth')
+    DR_PATH     = os.path.join(path, 'detection-results')
+    COCO_PATH   = os.path.join(path, 'coco_eval')
+
+    if not os.path.exists(COCO_PATH):
+        os.makedirs(COCO_PATH)
+
+    GT_JSON_PATH = os.path.join(COCO_PATH, 'instances_gt.json')
+    DR_JSON_PATH = os.path.join(COCO_PATH, 'instances_dr.json')
+
+    with open(GT_JSON_PATH, "w") as f:
+        results_gt  = preprocess_gt(GT_PATH, class_names)
+        json.dump(results_gt, f, indent=4)
+
+    with open(DR_JSON_PATH, "w") as f:
+        results_dr  = preprocess_dr(DR_PATH, class_names)
+        json.dump(results_dr, f, indent=4)
+        if len(results_dr) == 0:
+            print("未检测到任何目标。")
+            return [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+    cocoGt      = COCO(GT_JSON_PATH)
+    cocoDt      = cocoGt.loadRes(DR_JSON_PATH)
+    cocoEval    = COCOeval(cocoGt, cocoDt, 'bbox') 
+    cocoEval.evaluate()
+    cocoEval.accumulate()
+    cocoEval.summarize()
+
+    return cocoEval.stats

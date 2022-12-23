@@ -1,187 +1,236 @@
-from functools import partial
-import tensorflow as tf
-from tensorflow.keras.callbacks import EarlyStopping,TensorBoard
-from tensorflow.keras.optimizers import Adam
-from net.centernet import centernet
-from utils.callbacks import ExponentDecayScheduler, ModelCheckpoint
-from utils.dataloader import CenternetDatasets
-from utils.utils import get_classes
-import config
+import datetime
 import os
-from tqdm import tqdm
 
+import numpy as np
+import torch
+import torch.backends.cudnn as cudnn
+import torch.distributed as dist
+import torch.optim as optim
+from torch.utils.data import DataLoader
 
-def get_train_step_fn():
-    @tf.function
-    def train_step(batch_images, batch_hms, batch_whs, batch_regs, batch_reg_masks, batch_indices, net, optimizer):
-        with tf.GradientTape() as tape:
-            loss_value = net([batch_images, batch_hms, batch_whs, batch_regs, batch_reg_masks, batch_indices], training=True)
-        grads = tape.gradient(loss_value, net.trainable_variables)
-        optimizer.apply_gradients(zip(grads, net.trainable_variables))
-        return loss_value
-    return train_step
+from .net.centernet import CenterNet_HourglassNet, CenterNet_Resnet50
+from net.loss import get_lr_scheduler, set_optimizer_lr
+from .tools.callbacks import LossHistory
+from .tools.callbacks import EvalCallback, LossHistory
+from .tools.dataloader import CenternetDataset, centernet_dataset_collate
+from .tools.tools import download_weights, get_classes, show_config
+from .tools.fit import fit_one_epoch
 
-@tf.function
-def val_step(batch_images, batch_hms, batch_whs, batch_regs, batch_reg_masks, batch_indices, net, optimizer):
-    loss_value = net([batch_images, batch_hms, batch_whs, batch_regs, batch_reg_masks, batch_indices])
-    return loss_value
-
-def fit_one_epoch(net, loss_history, optimizer, epoch, epoch_step, epoch_step_val, gen, gen_val, Epoch):
-    train_step  = get_train_step_fn()
-    total_loss  = 0
-    val_loss    = 0
-    print('Start Train')
-    with tqdm(total=epoch_step,desc=f'Epoch {epoch + 1}/{Epoch}',postfix=dict,mininterval=0.3) as pbar:
-        for iteration, batch in enumerate(gen):
-            if iteration>=epoch_step:
-                break
-            batch = [tf.convert_to_tensor(part) for part in batch]
-            batch_images, batch_hms, batch_whs, batch_regs, batch_reg_masks, batch_indices = batch
-            loss_value = train_step(batch_images, batch_hms, batch_whs, batch_regs, batch_reg_masks, batch_indices, net, optimizer)
-            total_loss += loss_value
-            pbar.set_postfix(**{'total_loss': float(total_loss) / (iteration + 1), 'lr':optimizer._decayed_lr(tf.float32).numpy()})
-            pbar.update(1)
-
-    print('Start Validation')
-    with tqdm(total=epoch_step_val, desc=f'Epoch {epoch + 1}/{Epoch}',postfix=dict,mininterval=0.3) as pbar:
-        for iteration, batch in enumerate(gen_val):
-            if iteration>=epoch_step_val:
-                break
-            # 计算验证集loss
-            batch = [tf.convert_to_tensor(part) for part in batch]
-            batch_images, batch_hms, batch_whs, batch_regs, batch_reg_masks, batch_indices = batch
-            loss_value = val_step(batch_images, batch_hms, batch_whs, batch_regs, batch_reg_masks, batch_indices, net, optimizer)
-            val_loss += loss_value
-            # 更新验证集loss
-            pbar.set_postfix(**{'total_loss': float(val_loss)/ (iteration + 1)})
-            pbar.update(1)
-
-    logs = {'loss': total_loss.numpy() / epoch_step, 'val_loss': val_loss.numpy() / epoch_step_val}
-    loss_history.on_epoch_end([], logs)
-    print('Epoch:'+ str(epoch+1) + '/' + str(Epoch))
-    print('Total Loss: %.3f || Val Loss: %.3f ' % (total_loss / epoch_step, val_loss / epoch_step_val))
-    net.save_weights('logs/ep%03d-loss%.3f-val_loss%.3f.h5' % (epoch + 1, total_loss / epoch_step, val_loss / epoch_step_val))
-
-os.environ['CUDA_VISIBLE_DEVICES']='0'
-    
 if __name__ == "__main__":
-    eager = config.eager
-    classes_path  = config.class_name
-    model_path = config.ckp_path
-    input_shape = config.input_shape
-    backbone  = config.backbone
+    Cuda = True
+    distributed = False
+    sync_bn = False
+    fp16 = False
+    classes_path    = 'model_data/voc_classes.txt'
+    model_path = 'model_data/centernet_resnet50_voc.pth'
+    input_shape = [512, 512]
+    backbone = "resnet50"
+    pretrained      = False
+    
     Init_Epoch = 0
-    Freeze_Epoch = config.Freeze_Epoch
-    Freeze_batch_size = config.Freeze_batch_size
-    Freeze_lr = config.Freeze_lr
-    UnFreeze_Epoch = config.UnFreeze_Epoch
-    Unfreeze_batch_size = config.Unfreeze_batch_size
-    Unfreeze_lr = config.Unfreeze_lr
-    Freeze_Train = config.Freeze_train
-    train_annotation_path   = config.train_txt
-    val_annotation_path = config.val_txt
+    Freeze_Epoch = 50
+    Freeze_batch_size = 16
+    UnFreeze_Epoch = 100
+    Unfreeze_batch_size = 8
+    Freeze_Train = True
+    Init_lr = 5e-4
+    Min_lr = Init_lr * 0.01
+    optimizer_type = "adam"
+    momentum = 0.9
+    weight_decay = 0
+    lr_decay_type = 'cos'
+    save_period = 5
+    save_dir = 'logs'
+    eval_flag = True
+    eval_period = 5
+    num_workers = 4
+    train_annotation_path = '2007_train.txt'
+    val_annotation_path = '2007_val.txt'
+
+    ngpus_per_node  = torch.cuda.device_count()
+    if distributed:
+        dist.init_process_group(backend="nccl")
+        local_rank  = int(os.environ["LOCAL_RANK"])
+        rank        = int(os.environ["RANK"])
+        device      = torch.device("cuda", local_rank)
+        if local_rank == 0:
+            print(f"[{os.getpid()}] (rank = {rank}, local_rank = {local_rank}) training...")
+            print("Gpu Device Count : ", ngpus_per_node)
+    else:
+        device          = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        local_rank      = 0
+
+    if pretrained:
+        if distributed:
+            if local_rank == 0:
+                download_weights(backbone)  
+            dist.barrier()
+        else:
+            download_weights(backbone)
+
     class_names, num_classes = get_classes(classes_path)
 
-    model = centernet([input_shape[0], input_shape[1], 3], num_classes=num_classes, backbone=backbone, mode='train')
+    if backbone == "resnet50":
+        model = CenterNet_Resnet50(num_classes, pretrained = pretrained)
+    else:
+        model = CenterNet_HourglassNet({'hm': num_classes, 'wh': 2, 'reg':2}, pretrained = pretrained)
     if model_path != '':
-        print('Load weights {}.'.format(model_path))
-        model.load_weights(model_path, by_name=True, skip_mismatch=True)
+        if local_rank == 0:
+            print('Load weights {}.'.format(model_path))
+        model_dict      = model.state_dict()
+        pretrained_dict = torch.load(model_path, map_location = device)
+        load_key, no_load_key, temp_dict = [], [], {}
+        for k, v in pretrained_dict.items():
+            if k in model_dict.keys() and np.shape(model_dict[k]) == np.shape(v):
+                temp_dict[k] = v
+                load_key.append(k)
+            else:
+                no_load_key.append(k)
+        model_dict.update(temp_dict)
+        model.load_state_dict(model_dict)
+        if local_rank == 0:
+            print("\nSuccessful Load Key:", str(load_key)[:500], "……\nSuccessful Load Key Num:", len(load_key))
+            print("\nFail To Load Key:", str(no_load_key)[:500], "……\nFail To Load Key num:", len(no_load_key))
+            print("\n\033[1;33;44m温馨提示，head部分没有载入是正常现象，Backbone部分没有载入是错误的。\033[0m")
 
-    logging = TensorBoard(log_dir = config.log_dir)
-    checkpoint = ModelCheckpoint(config.model_ckp,monitor = 'val_loss', save_weights_only = True, save_best_only = False, period = 1)
-    reduce_lr = ExponentDecayScheduler(decay_rate = 0.94, verbose = 1)
-    early_stopping  = EarlyStopping(monitor='val_loss', min_delta=0, patience=10, verbose=1)
+    if local_rank == 0:
+        time_str        = datetime.datetime.strftime(datetime.datetime.now(),'%Y_%m_%d_%H_%M_%S')
+        log_dir         = os.path.join(save_dir, "loss_" + str(time_str))
+        loss_history    = LossHistory(log_dir, model, input_shape=input_shape)
+    else:
+        loss_history    = None
+        
+    if fp16:
+        from torch.cuda.amp import GradScaler as GradScaler
+        scaler = GradScaler()
+    else:
+        scaler = None
 
-    # 读取数据集
+    model_train = model.train()
+    if sync_bn and ngpus_per_node > 1 and distributed:
+        model_train = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model_train)
+    elif sync_bn:
+        print("Sync_bn is not support in one gpu or not distributed.")
+
+    if Cuda:
+        if distributed:
+            model_train = model_train.cuda(local_rank)
+            model_train = torch.nn.parallel.DistributedDataParallel(model_train, device_ids=[local_rank], find_unused_parameters=True)
+        else:
+            model_train = torch.nn.DataParallel(model)
+            cudnn.benchmark = True
+            model_train = model_train.cuda()
+    
     with open(train_annotation_path) as f:
         train_lines = f.readlines()
     with open(val_annotation_path) as f:
-        val_lines = f.readlines()
+        val_lines   = f.readlines()
     num_train = len(train_lines)
     num_val = len(val_lines)
-
-    if backbone == "resnet50":
-        freeze_layer = 171
-    elif backbone == "hourglass":
-        freeze_layer = 624
-    else:
-        raise ValueError('Unsupported backbone - `{}`, Use resnet50, hourglass.'.format(backbone))
-    if Freeze_Train:
-        for i in range(freeze_layer): model.layers[i].trainable = False
-        print('Freeze the first {} layers of total {} layers.'.format(freeze_layer, len(model.layers)))
-
-    batch_size  = Freeze_batch_size
-    lr = Freeze_lr
-    start_epoch = Init_Epoch
-    end_epoch  = Freeze_Epoch
-    epoch_step = num_train // batch_size
-    epoch_step_val = num_val // batch_size
-    if epoch_step == 0 or epoch_step_val == 0:
-        raise ValueError('数据集过小，无法进行训练，请扩充数据集。')
-    train_dataloader = CenternetDatasets(train_lines, input_shape, batch_size, num_classes, train = True)
-    val_dataloader = CenternetDatasets(val_lines, input_shape, batch_size, num_classes, train = False)
-    print('Train on {} samples, val on {} samples, with batch size {}.'.format(num_train, num_val, batch_size))
-    if eager:
-        gen_train = tf.data.Dataset.from_generator(partial(train_dataloader.generate), (tf.float32, tf.float32, tf.float32, tf.float32, tf.float32, tf.float32))
-        gen_val = tf.data.Dataset.from_generator(partial(val_dataloader.generate), (tf.float32, tf.float32, tf.float32, tf.float32, tf.float32, tf.float32))
-
-        gen_train  = gen_train.shuffle(buffer_size = batch_size).prefetch(buffer_size = batch_size)
-        gen_val = gen_val.shuffle(buffer_size = batch_size).prefetch(buffer_size = batch_size)
-
-        lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(initial_learning_rate = lr, decay_steps = epoch_step, decay_rate=0.94, staircase=True)
-            
-        optimizer = tf.keras.optimizers.Adam(learning_rate = lr_schedule)
-        for epoch in range(start_epoch, end_epoch):
-            fit_one_epoch(model, optimizer, epoch, epoch_step, epoch_step_val, gen_train, gen_val, end_epoch)
-    else:
-        model.compile(optimizer = Adam(lr), loss = {'centernet_loss': lambda y_true, y_pred: y_pred})
-        model.fit_generator(
-            generator= train_dataloader,
-            steps_per_epoch = epoch_step,
-            validation_data = val_dataloader,
-            validation_steps = epoch_step_val,
-            epochs = end_epoch,
-            initial_epoch = start_epoch,
-            callbacks = [logging, checkpoint, reduce_lr, early_stopping]
+    
+    if local_rank == 0:
+        show_config(
+            classes_path = classes_path, model_path = model_path, input_shape = input_shape, \
+            Init_Epoch = Init_Epoch, Freeze_Epoch = Freeze_Epoch, UnFreeze_Epoch = UnFreeze_Epoch, Freeze_batch_size = Freeze_batch_size, Unfreeze_batch_size = Unfreeze_batch_size, Freeze_Train = Freeze_Train, \
+            Init_lr = Init_lr, Min_lr = Min_lr, optimizer_type = optimizer_type, momentum = momentum, lr_decay_type = lr_decay_type, \
+            save_period = save_period, save_dir = save_dir, num_workers = num_workers, num_train = num_train, num_val = num_val
         )
-    if Freeze_Train:
-        for i in range(freeze_layer): model.layers[i].trainable = True
+        wanted_step = 5e4 if optimizer_type == "sgd" else 1.5e4
+        total_step  = num_train // Unfreeze_batch_size * UnFreeze_Epoch
+        if total_step <= wanted_step:
+            if num_train // Unfreeze_batch_size == 0:
+                raise ValueError('数据集过小，无法进行训练，请扩充数据集。')
+            wanted_epoch = wanted_step // (num_train // Unfreeze_batch_size) + 1
+            print("\n\033[1;33;44m[Warning] 使用%s优化器时，建议将训练总步长设置到%d以上。\033[0m"%(optimizer_type, wanted_step))
+            print("\033[1;33;44m[Warning] 本次运行的总训练数据量为%d，Unfreeze_batch_size为%d，共训练%d个Epoch，计算出总训练步长为%d。\033[0m"%(num_train, Unfreeze_batch_size, UnFreeze_Epoch, total_step))
+            print("\033[1;33;44m[Warning] 由于总训练步长为%d，小于建议总步长%d，建议设置总世代为%d。\033[0m"%(total_step, wanted_step, wanted_epoch))
 
-        batch_size = Unfreeze_batch_size
-        lr = Unfreeze_lr
-        start_epoch = Freeze_Epoch
-        end_epoch = UnFreeze_Epoch
+    if True:
+        UnFreeze_flag = False
+        if Freeze_Train:
+            model.freeze_backbone()
+                        
+        batch_size = Freeze_batch_size if Freeze_Train else Unfreeze_batch_size
 
-        epoch_step = num_train // batch_size
-        epoch_step_val = num_val // batch_size
+        nbs = 64
+        lr_limit_max    = 5e-4 if optimizer_type == 'adam' else 5e-2
+        lr_limit_min    = 2.5e-4 if optimizer_type == 'adam' else 5e-4
+        Init_lr_fit     = min(max(batch_size / nbs * Init_lr, lr_limit_min), lr_limit_max)
+        Min_lr_fit      = min(max(batch_size / nbs * Min_lr, lr_limit_min * 1e-2), lr_limit_max * 1e-2)
+
+        optimizer = {
+            'adam'  : optim.Adam(model.parameters(), Init_lr_fit, betas = (momentum, 0.999), weight_decay = weight_decay),
+            'sgd'   : optim.SGD(model.parameters(), Init_lr_fit, momentum = momentum, nesterov=True, weight_decay = weight_decay)
+        }[optimizer_type]
+
+        lr_scheduler_func = get_lr_scheduler(lr_decay_type, Init_lr_fit, Min_lr_fit, UnFreeze_Epoch)
+
+        epoch_step      = num_train // batch_size
+        epoch_step_val  = num_val // batch_size
 
         if epoch_step == 0 or epoch_step_val == 0:
-            raise ValueError('数据集过小，无法进行训练，请扩充数据集。')
-
-        train_dataloader = CenternetDatasets(train_lines, input_shape, batch_size, num_classes, train = True)
-        val_dataloader = CenternetDatasets(val_lines, input_shape, batch_size, num_classes, train = False)
-
-        print('Train on {} samples, val on {} samples, with batch size {}.'.format(num_train, num_val, batch_size))
-        if eager:
-            gen_train = tf.data.Dataset.from_generator(partial(train_dataloader.generate), (tf.float32, tf.float32, tf.float32, tf.float32, tf.float32, tf.float32))
-            gen_val = tf.data.Dataset.from_generator(partial(val_dataloader.generate), (tf.float32, tf.float32, tf.float32, tf.float32, tf.float32, tf.float32))
-
-            gen = gen_train.shuffle(buffer_size = batch_size).prefetch(buffer_size = batch_size)
-            gen_val = gen_val.shuffle(buffer_size = batch_size).prefetch(buffer_size = batch_size)
-
-            lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(initial_learning_rate = lr, decay_steps = epoch_step, decay_rate=0.94, staircase=True)
-            
-            optimizer = tf.keras.optimizers.Adam(learning_rate = lr_schedule)
-            for epoch in range(start_epoch, end_epoch):
-                fit_one_epoch(model, optimizer, epoch, epoch_step, epoch_step_val, gen_train, gen_val, end_epoch)
+            raise ValueError("数据集过小，无法继续进行训练，请扩充数据集。")
+        
+        train_dataset   = CenternetDataset(train_lines, input_shape, num_classes, train = True)
+        val_dataset     = CenternetDataset(val_lines, input_shape, num_classes, train = False)
+        
+        if distributed:
+            train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, shuffle=True,)
+            val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset, shuffle=False,)
+            batch_size = batch_size // ngpus_per_node
+            shuffle = False
         else:
-            model.compile(optimizer = Adam(lr), loss = {'centernet_loss': lambda y_true, y_pred: y_pred})
-            model.fit_generator(
-                generator = train_dataloader,
-                steps_per_epoch = epoch_step,
-                validation_data = val_dataloader,
-                validation_steps = epoch_step_val,
-                epochs = end_epoch,
-                initial_epoch = start_epoch,
-                callbacks = [logging, checkpoint, reduce_lr, early_stopping]
-            )
+            train_sampler   = None
+            val_sampler = None
+            shuffle = True
+            
+        gen = DataLoader(train_dataset, shuffle = shuffle, batch_size = batch_size, num_workers = num_workers, pin_memory=True,
+                                    drop_last=True, collate_fn=centernet_dataset_collate, sampler=train_sampler)
+        gen_val = DataLoader(val_dataset  , shuffle = shuffle, batch_size = batch_size, num_workers = num_workers, pin_memory=True, 
+                                    drop_last=True, collate_fn=centernet_dataset_collate, sampler=val_sampler)
+
+        if local_rank == 0:
+            eval_callback   = EvalCallback(model, backbone, input_shape, class_names, num_classes, val_lines, log_dir, Cuda, \
+                                            eval_flag=eval_flag, period=eval_period)
+        else:
+            eval_callback   = None
+        
+        for epoch in range(Init_Epoch, UnFreeze_Epoch):
+            if epoch >= Freeze_Epoch and not UnFreeze_flag and Freeze_Train:
+                batch_size = Unfreeze_batch_size
+
+                nbs             = 64
+                lr_limit_max    = 5e-4 if optimizer_type == 'adam' else 5e-2
+                lr_limit_min    = 2.5e-4 if optimizer_type == 'adam' else 5e-4
+                Init_lr_fit     = min(max(batch_size / nbs * Init_lr, lr_limit_min), lr_limit_max)
+                Min_lr_fit      = min(max(batch_size / nbs * Min_lr, lr_limit_min * 1e-2), lr_limit_max * 1e-2)
+                lr_scheduler_func = get_lr_scheduler(lr_decay_type, Init_lr_fit, Min_lr_fit, UnFreeze_Epoch)
+                    
+                model.unfreeze_backbone()
+
+                epoch_step      = num_train // batch_size
+                epoch_step_val  = num_val // batch_size
+
+                if epoch_step == 0 or epoch_step_val == 0:
+                    raise ValueError("数据集过小，无法继续进行训练，请扩充数据集。")
+
+                if distributed:
+                    batch_size = batch_size // ngpus_per_node
+                    
+                gen = DataLoader(train_dataset, shuffle = shuffle, batch_size = batch_size, num_workers = num_workers, pin_memory=True,
+                                            drop_last=True, collate_fn=centernet_dataset_collate, sampler=train_sampler)
+                gen_val = DataLoader(val_dataset  , shuffle = shuffle, batch_size = batch_size, num_workers = num_workers, pin_memory=True, 
+                                            drop_last=True, collate_fn=centernet_dataset_collate, sampler=val_sampler)
+
+                UnFreeze_flag = True
+
+            if distributed:
+                train_sampler.set_epoch(epoch)
+                
+            set_optimizer_lr(optimizer, lr_scheduler_func, epoch)
+            
+            fit_one_epoch(model_train, model, loss_history, eval_callback, optimizer, epoch, 
+                    epoch_step, epoch_step_val, gen, gen_val, UnFreeze_Epoch, Cuda, fp16, scaler, backbone, save_period, save_dir, local_rank)
+            
+        if local_rank == 0:
+            loss_history.writer.close()
