@@ -1,10 +1,10 @@
 import os
 
 import torch
-from nets.centernet_training import focal_loss, reg_l1_loss
+from net.loss import focal_loss, reg_l1_loss
 from tqdm import tqdm
 
-from utils.utils import get_lr
+from .tools import get_lr
 
 
 def fit_one_epoch(model_train, model, loss_history, eval_callback, optimizer, epoch, epoch_step, epoch_step_val, gen, gen_val, Epoch, cuda, fp16, scaler, backbone, save_period, save_dir, local_rank=0):

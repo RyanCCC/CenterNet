@@ -6,7 +6,7 @@ import torch
 from PIL import Image
 from torch.utils.data.dataset import Dataset
 
-from utils.utils import cvtColor, preprocess_input
+from .tools import cvtColor, preprocess_input
 
 def draw_gaussian(heatmap, center, radius, k=1):
     diameter = 2 * radius + 1

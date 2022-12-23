@@ -8,44 +8,45 @@ import torch.distributed as dist
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
-from .net.centernet import CenterNet_HourglassNet, CenterNet_Resnet50
+from net.centernet import CenterNet_HourglassNet, CenterNet_Resnet50
 from net.loss import get_lr_scheduler, set_optimizer_lr
-from .tools.callbacks import LossHistory
-from .tools.callbacks import EvalCallback, LossHistory
-from .tools.dataloader import CenternetDataset, centernet_dataset_collate
-from .tools.tools import download_weights, get_classes, show_config
-from .tools.fit import fit_one_epoch
+from tools.callbacks import LossHistory
+from tools.callbacks import EvalCallback, LossHistory
+from tools.dataloader import CenternetDataset, centernet_dataset_collate
+from tools.tools import download_weights, get_classes, show_config
+from tools.fit import fit_one_epoch
+import config
 
 if __name__ == "__main__":
-    Cuda = True
-    distributed = False
-    sync_bn = False
-    fp16 = False
-    classes_path    = 'model_data/voc_classes.txt'
-    model_path = 'model_data/centernet_resnet50_voc.pth'
-    input_shape = [512, 512]
-    backbone = "resnet50"
-    pretrained      = False
+    Cuda = config.cuda
+    distributed = config.distributed
+    sync_bn = config.distributed
+    fp16 = config.fp16
+    classes_path = config.class_name
+    model_path = config.ckp_path
+    input_shape = config.input_shape
+    backbone = config.backbone
+    pretrained = False
     
     Init_Epoch = 0
-    Freeze_Epoch = 50
-    Freeze_batch_size = 16
-    UnFreeze_Epoch = 100
-    Unfreeze_batch_size = 8
-    Freeze_Train = True
-    Init_lr = 5e-4
+    Freeze_Epoch = config.Freeze_Epoch
+    Freeze_batch_size = config.Freeze_batch_size
+    UnFreeze_Epoch = config.UnFreeze_Epoch
+    Unfreeze_batch_size = Freeze_batch_size//2
+    Freeze_Train = config.Freeze_train
+    Init_lr = config.learning_rate
     Min_lr = Init_lr * 0.01
     optimizer_type = "adam"
     momentum = 0.9
     weight_decay = 0
     lr_decay_type = 'cos'
     save_period = 5
-    save_dir = 'logs'
+    save_dir = config.log_dir
     eval_flag = True
     eval_period = 5
-    num_workers = 4
-    train_annotation_path = '2007_train.txt'
-    val_annotation_path = '2007_val.txt'
+    num_workers = 2
+    train_annotation_path = config.train_txt
+    val_annotation_path = config.val_txt
 
     ngpus_per_node  = torch.cuda.device_count()
     if distributed:
@@ -57,8 +58,8 @@ if __name__ == "__main__":
             print(f"[{os.getpid()}] (rank = {rank}, local_rank = {local_rank}) training...")
             print("Gpu Device Count : ", ngpus_per_node)
     else:
-        device          = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        local_rank      = 0
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        local_rank = 0
 
     if pretrained:
         if distributed:

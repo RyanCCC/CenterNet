@@ -1,10 +1,15 @@
 import numpy as np
 from PIL import Image
+from pathlib import Path
 
-#---------------------------------------------------------#
-#   将图像转换成RGB图像，防止灰度图在预测时报错。
-#   代码仅仅支持RGB图像的预测，所有其它类型的图像都会转化成RGB
-#---------------------------------------------------------#
+def check_suffix(file='yolov5s.pth', suffix = ('.pth'), msg = '' ):
+    if file and suffix:
+        if isinstance(suffix, str):
+            suffix = [suffix]
+        for f in file if isinstance(file, (list, tuple)) else [file]:
+            assert Path(f).suffix.lower() in suffix, f"{msg}{f} acceptable suffix is {suffix}"
+
+
 def cvtColor(image):
     if len(np.shape(image)) == 3 and np.shape(image)[2] == 3:
         return image 
@@ -53,7 +58,7 @@ def show_config(**kwargs):
         print('|%25s | %40s|' % (str(key), str(value)))
     print('-' * 70)
 
-def download_weights(backbone, model_dir="./model_data"):
+def download_weights(backbone, model_dir="./model"):
     import os
     from torch.hub import load_state_dict_from_url
     

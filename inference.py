@@ -13,9 +13,9 @@ import torch.backends.cudnn as cudnn
 from PIL import ImageDraw, ImageFont
 
 from net.centernet import CenterNet_HourglassNet, CenterNet_Resnet50
-from tools.tools import (cvtColor, get_classes, preprocess_input, resize_image,
-                         show_config)
+from tools.tools import cvtColor, get_classes, preprocess_input, resize_image, check_suffix
 from tools.bbox import decode_bbox, postprocess
+from pathlib import Path
 
 class CenterNet(object):
     def __init__(self, **kwargs):
@@ -40,48 +40,64 @@ class CenterNet(object):
         self.generate()
 
     def generate(self, onnx=False):
-        assert self.backbone in ['resnet50', 'hourglass']
-        if self.backbone == "resnet50":
-            self.net = CenterNet_Resnet50(num_classes=self.num_classes, pretrained=False)
-        else:
-            self.net = CenterNet_HourglassNet({'hm': self.num_classes, 'wh': 2, 'reg':2})
+        # 加载不同类型的模型
+        weights = str(self.model_path[0] if isinstance(self.model_path, list) else self.model_path)
+        suffix, suffixes = Path(weights).suffix.lower(), ['.pth', '.onnx']
+        # check weights have acceptable suffix
+        check_suffix(weights, suffixes)
+        # backbend booleans
+        self.pt, self.onnx = (suffix==x for x in suffixes)
+        if self.pt:
+            assert self.backbone in ['resnet50', 'hourglass']
+            if self.backbone == "resnet50":
+                self.net = CenterNet_Resnet50(num_classes=self.num_classes, pretrained=False)
+            else:
+                self.net = CenterNet_HourglassNet({'hm': self.num_classes, 'wh': 2, 'reg':2})
 
-        device      = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.net.load_state_dict(torch.load(self.model_path, map_location=device))
-        self.net    = self.net.eval()
-        print('{} model, and classes loaded.'.format(self.model_path))
-        if not onnx:
+            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            self.net.load_state_dict(torch.load(self.model_path, map_location=device))
+            self.net    = self.net.eval()
+            print('{} model, and classes loaded.'.format(self.model_path))
             if self.cuda:
                 self.net = torch.nn.DataParallel(self.net)
                 self.net = self.net.cuda()
+        if self.onnx:
+            import onnxruntime
+            print('Init ONNX model')
+            self.net = onnxruntime.InferenceSession(weights, None)
 
     def preprocessing(self, image):
         image = cvtColor(image)
         image_data  = resize_image(image, (self.input_shape[1], self.input_shape[0]), self.letterbox_image)
-        image_data = np.expand_dims(np.transpose(preprocess_input(np.array(image_data, dtype='float32')), (2, 0, 1)), 0)
+        image_data = np.expand_dims(np.transpose(preprocess_input(np.array(image_data, np.float32)), (2, 0, 1)), 0)
         return image_data
 
     def detect(self, image, crop = False, count = False):
         image_shape = np.array(np.shape(image)[0:2])
         image_data = self.preprocessing(image)
 
-        with torch.no_grad():
-            images = torch.from_numpy(np.asarray(image_data)).type(torch.FloatTensor)
-            if self.cuda:
-                images = images.cuda()
-            outputs = self.net(images)
-            if self.backbone == 'hourglass':
-                outputs = [outputs[-1]["hm"].sigmoid(), outputs[-1]["wh"], outputs[-1]["reg"]]
+        # 推理
+        if self.pt:
+            with torch.no_grad():
+                images = torch.from_numpy(np.asarray(image_data)).type(torch.FloatTensor)
+                if self.cuda:
+                    images = images.cuda()
+                outputs = self.net(images)
 
-            outputs = decode_bbox(outputs[0], outputs[1], outputs[2], self.confidence, self.cuda)
-            results = postprocess(outputs, self.nms, image_shape, self.input_shape, self.letterbox_image, self.nms_iou)
-            
-            if results[0] is None:
-                return image
+        if self.onnx:
+            print('ONNNX Inference...')
+            outputs = torch.tensor(self.net.run([self.net.get_outputs()[0].name], {self.net.get_inputs()[0].name: image_data}))
+        if self.backbone == 'hourglass':
+            outputs = [outputs[-1]["hm"].sigmoid(), outputs[-1]["wh"], outputs[-1]["reg"]]
 
-            top_label   = np.array(results[0][:, 5], dtype = 'int32')
-            top_conf    = results[0][:, 4]
-            top_boxes   = results[0][:, :4]
+        outputs = decode_bbox(outputs[0], outputs[1], outputs[2], self.confidence, self.cuda)
+        results = postprocess(outputs, self.nms, image_shape, self.input_shape, self.letterbox_image, self.nms_iou)            
+        if results[0] is None:
+            return image
+
+        top_label   = np.array(results[0][:, 5], dtype = 'int32')
+        top_conf    = results[0][:, 4]
+        top_boxes   = results[0][:, :4]
 
         font = ImageFont.truetype(font = './data/simhei.ttf', size=np.floor(3e-2 * np.shape(image)[1] + 0.5).astype('int32'))
         thickness = max((np.shape(image)[0] + np.shape(image)[1]) // self.input_shape[0], 1)
@@ -238,7 +254,7 @@ def dir_inference(imag_dir, model, save=True, save_dir='./result'):
 
 if __name__ == "__main__":
     centernet = CenterNet(
-        model_path = './model/centernet_resnet50_voc.pth',
+        model_path = './test.onnx',
         classes_path= './data/voc_classes.names',
         backbone = 'resnet50',
         input_shape = [512, 512],
