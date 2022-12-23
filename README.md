@@ -38,9 +38,9 @@
 2. 在evaluate文件夹里面有cal_map.py文件对模型的性能进行评估。
 
 
-## 20221223更新
+## 更新
 
-1. 增加了pytorch分支，基于pytorch实现CenterNet
+1. 20221223-增加了pytorch分支，基于pytorch实现CenterNet
 
 ## 参考
 
