@@ -40,7 +40,7 @@
 
 ## 更新
 
-1. 20221223-增加了pytorch分支，基于pytorch实现CenterNet
+1. 20221223：增加了pytorch分支，基于pytorch实现CenterNet
 
 ## 参考
 
